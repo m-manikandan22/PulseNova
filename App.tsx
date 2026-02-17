@@ -1,118 +1,87 @@
+
 /**
- * Sample React Native App
- * https://github.com/facebook/react-native
- *
- * @format
+ * Pulse Nova
+ * Cardiovascular Trend Monitoring App
+ * 
+ * Architecture:
+ * - AuthProvider (Global Authentication)
+ * - DeviceProvider (Global BLE Connection)
+ * - RootNavigator (State-Based Navigation)
  */
 
 import React from 'react';
-import type {PropsWithChildren} from 'react';
-import {
-  SafeAreaView,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  useColorScheme,
-  View,
-} from 'react-native';
+import { StatusBar, Platform, PermissionsAndroid } from 'react-native';
+import { NavigationContainer } from '@react-navigation/native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { AuthProvider } from './src/contexts/AuthContext';
+import { DeviceProvider } from './src/contexts/DeviceContext';
+import { RootNavigator } from './src/navigation/RootNavigator';
 
-import {
-  Colors,
-  DebugInstructions,
-  Header,
-  LearnMoreLinks,
-  ReloadInstructions,
-} from 'react-native/Libraries/NewAppScreen';
+const App: React.FC = () => {
 
-type SectionProps = PropsWithChildren<{
-  title: string;
-}>;
+    // Permissions logic wrapped in effect usually, or handled inside DeviceContext init.
+    // Keeping it here for now or moving to DeviceContext?
+    // User asked for "Complete code for Updated App.tsx".
+    // Best practice is to request permissions early.
 
-function Section({children, title}: SectionProps): React.JSX.Element {
-  const isDarkMode = useColorScheme() === 'dark';
-  return (
-    <View style={styles.sectionContainer}>
-      <Text
-        style={[
-          styles.sectionTitle,
-          {
-            color: isDarkMode ? Colors.white : Colors.black,
-          },
-        ]}>
-        {title}
-      </Text>
-      <Text
-        style={[
-          styles.sectionDescription,
-          {
-            color: isDarkMode ? Colors.light : Colors.dark,
-          },
-        ]}>
-        {children}
-      </Text>
-    </View>
-  );
-}
+    React.useEffect(() => {
+        requestPermissions();
 
-function App(): React.JSX.Element {
-  const isDarkMode = useColorScheme() === 'dark';
+        // Deep Linking Listener for Magic Link
+        const handleDeepLink = ({ url }: { url: string }) => {
+            if (url) {
+                // Import Dynamically or move AuthService to global if needed
+                // But App.tsx imports AuthService via AuthProvider... 
+                // Wait, AuthProvider uses AuthService, but we can't access it here easily unless we import it directly.
+                // We'll import AuthService directly.
+                require('./src/services/AuthService').default.handleDeepLink(url);
+            }
+        };
 
-  const backgroundStyle = {
-    backgroundColor: isDarkMode ? Colors.darker : Colors.lighter,
-  };
+        const linkingSubscription = require('react-native').Linking.addEventListener('url', handleDeepLink);
 
-  return (
-    <SafeAreaView style={backgroundStyle}>
-      <StatusBar
-        barStyle={isDarkMode ? 'light-content' : 'dark-content'}
-        backgroundColor={backgroundStyle.backgroundColor}
-      />
-      <ScrollView
-        contentInsetAdjustmentBehavior="automatic"
-        style={backgroundStyle}>
-        <Header />
-        <View
-          style={{
-            backgroundColor: isDarkMode ? Colors.black : Colors.white,
-          }}>
-          <Section title="Step One">
-            Edit <Text style={styles.highlight}>App.tsx</Text> to change this
-            screen and then come back to see your edits.
-          </Section>
-          <Section title="See Your Changes">
-            <ReloadInstructions />
-          </Section>
-          <Section title="Debug">
-            <DebugInstructions />
-          </Section>
-          <Section title="Learn More">
-            Read the docs to discover what to do next:
-          </Section>
-          <LearnMoreLinks />
-        </View>
-      </ScrollView>
-    </SafeAreaView>
-  );
-}
+        // Check initial URL
+        require('react-native').Linking.getInitialURL().then((url: string | null) => {
+            if (url) handleDeepLink({ url });
+        });
 
-const styles = StyleSheet.create({
-  sectionContainer: {
-    marginTop: 32,
-    paddingHorizontal: 24,
-  },
-  sectionTitle: {
-    fontSize: 24,
-    fontWeight: '600',
-  },
-  sectionDescription: {
-    marginTop: 8,
-    fontSize: 18,
-    fontWeight: '400',
-  },
-  highlight: {
-    fontWeight: '700',
-  },
-});
+        return () => {
+            linkingSubscription.remove();
+        };
+    }, []);
+
+    const requestPermissions = async () => {
+        if (Platform.OS === 'android') {
+            const apiLevel = Platform.Version;
+
+            if (apiLevel >= 31) {
+                await PermissionsAndroid.requestMultiple([
+                    PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+                    PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+                    PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+                ]);
+            } else {
+                await PermissionsAndroid.requestMultiple([
+                    PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+                    PermissionsAndroid.PERMISSIONS.BLUETOOTH,
+                    PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADMIN,
+                ]);
+            }
+        }
+    };
+
+    return (
+        <SafeAreaProvider>
+            <AuthProvider>
+                <DeviceProvider>
+                    <NavigationContainer>
+                        <StatusBar barStyle="light-content" />
+                        <RootNavigator />
+                    </NavigationContainer>
+                </DeviceProvider>
+            </AuthProvider>
+        </SafeAreaProvider>
+    );
+};
 
 export default App;
