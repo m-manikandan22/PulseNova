@@ -1,9 +1,10 @@
 /**
  * Baseline Service
- * Manages baseline calculation and learning period
+ * Manages baseline calculation and learning period (local-only)
  */
 
 import Database from '../database/db';
+import { LOCAL_USER_ID } from '../core/constants';
 import { Baseline, StoredReading } from '../ble/types';
 
 const LEARNING_PERIOD_DAYS = 7;
@@ -13,7 +14,7 @@ class BaselineService {
      * Check if baseline exists
      */
     async hasBaseline(): Promise<boolean> {
-        const baseline = await Database.getBaseline();
+        const baseline = await Database.getBaseline(LOCAL_USER_ID);
         return baseline !== null;
     }
 
@@ -21,14 +22,14 @@ class BaselineService {
      * Get current baseline
      */
     async getBaseline(): Promise<Baseline | null> {
-        return await Database.getBaseline();
+        return await Database.getBaseline(LOCAL_USER_ID);
     }
 
     /**
      * Check if still in learning period
      */
     async isInLearningPeriod(): Promise<boolean> {
-        const baseline = await Database.getBaseline();
+        const baseline = await Database.getBaseline(LOCAL_USER_ID);
         if (!baseline) return true;
 
         const learningEndDate = baseline.baseline_start_date + LEARNING_PERIOD_DAYS * 24 * 60 * 60 * 1000;
@@ -39,7 +40,7 @@ class BaselineService {
      * Get days remaining in learning period
      */
     async getLearningPeriodDaysRemaining(): Promise<number> {
-        const baseline = await Database.getBaseline();
+        const baseline = await Database.getBaseline(LOCAL_USER_ID);
         if (!baseline) return LEARNING_PERIOD_DAYS;
 
         const learningEndDate = baseline.baseline_start_date + LEARNING_PERIOD_DAYS * 24 * 60 * 60 * 1000;
@@ -56,7 +57,7 @@ class BaselineService {
         const baselineStartDate = startDate || Date.now();
 
         // Get readings for baseline period (7 days, excluding motion artifacts and low confidence)
-        const readings = await Database.getBaselineReadings(baselineStartDate);
+        const readings = await Database.getBaselineReadings(LOCAL_USER_ID, baselineStartDate);
 
         if (readings.length < 10) {
             console.log('Not enough readings for baseline calculation');
@@ -85,7 +86,7 @@ class BaselineService {
         };
 
         // Save baseline
-        await Database.saveBaseline(baseline);
+        await Database.saveBaseline(LOCAL_USER_ID, baseline);
 
         console.log('Baseline calculated:', baseline);
         return baseline;
@@ -95,7 +96,7 @@ class BaselineService {
      * Recalibrate baseline (start new learning period)
      */
     async recalibrate(): Promise<void> {
-        await Database.deleteBaseline();
+        await Database.deleteBaseline(LOCAL_USER_ID);
         console.log('Baseline deleted - starting new learning period');
     }
 
@@ -115,7 +116,7 @@ class BaselineService {
 
         if (isLearning) {
             // Still in learning period - try to update baseline
-            const currentBaseline = await Database.getBaseline();
+            const currentBaseline = await Database.getBaseline(LOCAL_USER_ID);
             if (currentBaseline) {
                 const updatedBaseline = await this.calculateBaseline(currentBaseline.baseline_start_date);
                 return updatedBaseline !== null;

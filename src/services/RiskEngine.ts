@@ -3,8 +3,9 @@
  * Rule-based cardiovascular risk scoring with explainable output
  */
 
-import { HealthReading, RiskAssessment, Baseline } from '../ble/types';
+import { HealthReading, RiskAssessment, Baseline, BPCategory, RiskLevel } from '../ble/types';
 import Database from '../database/db';
+import { LOCAL_USER_ID } from '../core/constants';
 
 const RISK_THRESHOLDS = {
     LOW: 30,
@@ -16,28 +17,28 @@ class RiskEngine {
      * Classify Blood Pressure based on ACC/AHA 2017 Guidelines
      */
     private classifyBloodPressure(sys: number, dia: number): {
-        stage: 'NORMAL' | 'ELEVATED' | 'STAGE_1' | 'STAGE_2' | 'CRISIS';
+        stage: BPCategory;
         color: string;
         label: string;
     } {
         if (sys > 180 || dia > 120) {
-            return { stage: 'CRISIS', color: '#FF0000', label: 'Hypertensive Crisis' };
+            return { stage: BPCategory.CRISIS, color: '#FF0000', label: 'Hypertensive Crisis' };
         } else if (sys >= 140 || dia >= 90) {
-            return { stage: 'STAGE_2', color: '#FF4500', label: 'Stage 2 Hypertension' };
+            return { stage: BPCategory.STAGE_2, color: '#FF4500', label: 'Stage 2 Hypertension' };
         } else if ((sys >= 130 && sys <= 139) || (dia >= 80 && dia <= 89)) {
-            return { stage: 'STAGE_1', color: '#FFA500', label: 'Stage 1 Hypertension' };
+            return { stage: BPCategory.STAGE_1, color: '#FFA500', label: 'Stage 1 Hypertension' };
         } else if (sys >= 120 && sys <= 129 && dia < 80) {
-            return { stage: 'ELEVATED', color: '#FFD700', label: 'Elevated' };
+            return { stage: BPCategory.ELEVATED, color: '#FFD700', label: 'Elevated' };
         } else {
-            return { stage: 'NORMAL', color: '#00FF00', label: 'Normal' };
+            return { stage: BPCategory.NORMAL, color: '#00FF00', label: 'Normal' };
         }
     }
 
     /**
      * Calculate risk score based on current reading and baseline
      */
-    async calculateRisk(reading: HealthReading): Promise<RiskAssessment & { bpClassification: { stage: string, label: string, color: string } }> {
-        const baseline = await Database.getBaseline();
+    async calculateRisk(reading: HealthReading): Promise<RiskAssessment> {
+        const baseline = await Database.getBaseline(LOCAL_USER_ID);
 
         // Clinical Classification (Absolute)
         const bpClass = this.classifyBloodPressure(reading.bp_sys, reading.bp_dia);
@@ -45,7 +46,7 @@ class RiskEngine {
         if (!baseline) {
             return {
                 score: 0,
-                category: 'LOW',
+                category: RiskLevel.LOW,
                 explanation: 'Building your personal baseline.',
                 suggestion: 'Continue wearing your device.',
                 bpClassification: bpClass
@@ -60,7 +61,7 @@ class RiskEngine {
             const daysRemaining = Math.ceil((learningEndDate - Date.now()) / (24 * 60 * 60 * 1000));
             return {
                 score: 0,
-                category: 'LOW',
+                category: RiskLevel.LOW,
                 explanation: `Learning phase active (${daysRemaining} days remaining).`,
                 suggestion: 'Continue wearing your device to establish your personal baseline.',
                 bpClassification: bpClass
@@ -92,9 +93,9 @@ class RiskEngine {
         }
 
         // Boost risk score if absolute BP is high, regardless of baseline
-        if (bpClass.stage === 'STAGE_2' || bpClass.stage === 'CRISIS') {
+        if (bpClass.stage === BPCategory.STAGE_2 || bpClass.stage === BPCategory.CRISIS) {
             riskScore = Math.max(riskScore, 80); // Force high risk for dangerous absolute levels
-        } else if (bpClass.stage === 'STAGE_1') {
+        } else if (bpClass.stage === BPCategory.STAGE_1) {
             riskScore = Math.max(riskScore, 50); // Force moderate risk
         }
 
@@ -167,13 +168,13 @@ class RiskEngine {
      */
     private async calculateTrendPersistence(currentReading: HealthReading): Promise<number> {
         const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
-        const recentReadings = await Database.getReadings(oneDayAgo, Date.now());
+        const recentReadings = await Database.getReadings(LOCAL_USER_ID, oneDayAgo, Date.now());
 
         if (recentReadings.length < 10) {
             return 0; // Not enough data
         }
 
-        const baseline = await Database.getBaseline();
+        const baseline = await Database.getBaseline(LOCAL_USER_ID);
         if (!baseline) return 0;
 
         // Count how many recent readings show elevation
@@ -197,13 +198,13 @@ class RiskEngine {
     /**
      * Categorize risk score
      */
-    private categorizeRisk(score: number): 'LOW' | 'MODERATE' | 'ELEVATED' {
+    private categorizeRisk(score: number): RiskLevel {
         if (score < RISK_THRESHOLDS.LOW) {
-            return 'LOW';
+            return RiskLevel.LOW;
         } else if (score < RISK_THRESHOLDS.MODERATE) {
-            return 'MODERATE';
+            return RiskLevel.MODERATE;
         } else {
-            return 'ELEVATED';
+            return RiskLevel.HIGH;
         }
     }
 
@@ -211,7 +212,7 @@ class RiskEngine {
      * Generate human-readable explanation and suggestion
      */
     private generateExplanation(
-        category: 'LOW' | 'MODERATE' | 'ELEVATED',
+        category: RiskLevel,
         score: number,
         bpDeviation: number,
         hrvReduction: number,
@@ -230,13 +231,13 @@ class RiskEngine {
             : '';
 
         switch (category) {
-            case 'LOW':
+            case RiskLevel.LOW:
                 return {
                     explanation: `Your cardiovascular trends are stable.${confidenceNote}`,
                     suggestion: 'Continue your healthy lifestyle and regular monitoring.',
                 };
 
-            case 'MODERATE':
+            case RiskLevel.MODERATE:
                 if (factors.length > 0) {
                     return {
                         explanation: `Recent readings show changes in ${factors.join(' and ')}.${confidenceNote}`,
@@ -249,7 +250,8 @@ class RiskEngine {
                     suggestion: 'Continue monitoring and maintain healthy habits.',
                 };
 
-            case 'ELEVATED':
+            case RiskLevel.HIGH:
+            case RiskLevel.CRITICAL:
                 if (factors.length > 0) {
                     return {
                         explanation: `Your readings show persistent changes in ${factors.join(' and ')}.${confidenceNote}`,

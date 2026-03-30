@@ -12,12 +12,16 @@ import {
     FlatList,
     ActivityIndicator,
     useColorScheme,
+    Alert,
 } from 'react-native';
 import { Colors } from '../styles/colors';
 import { spacing, typography, borderRadius, shadows } from '../styles/theme';
+import { DEV_MODE } from '../core/constants';
 import BleManager from '../ble/BleManager';
-import { ConnectionStatus, DeviceInfo } from '../ble/types';
+import DataSyncService from '../services/DataSyncService';
+import { ConnectionStatus, DeviceInfo, HealthReading } from '../ble/types';
 import { useDevice } from '../contexts/DeviceContext';
+import { SignalIcon, BatteryIcon } from '../components/SVGIcons';
 
 
 export const ConnectionScreen: React.FC = () => {
@@ -28,17 +32,36 @@ export const ConnectionScreen: React.FC = () => {
         connectionStatus,
         connectToDevice,
         scanForDevices,
+        connectedDevice,
         error: contextError
     } = useDevice();
 
     const [devices, setDevices] = useState<DeviceInfo[]>([]);
     const [scanning, setScanning] = useState(false);
     const [localError, setLocalError] = useState<string | null>(null);
+    const [liveReading, setLiveReading] = useState<HealthReading | null>(null);
 
     // Combine errors
     const displayError = localError || contextError;
 
+    // Subscribe to live readings for device health panel
+    useEffect(() => {
+        DataSyncService.onDataUpdate((reading) => {
+            setLiveReading(reading);
+        });
+    }, []);
+
     const handleScan = async () => {
+        // DEV MODE: Skip BLE scanning
+        if (DEV_MODE) {
+            Alert.alert(
+                'Dev Mode Active',
+                'BLE scanning is disabled in development mode. To enable scanning, set DEV_MODE = false in src/core/constants.ts',
+                [{ text: 'OK' }]
+            );
+            return;
+        }
+
         setScanning(true);
         setLocalError(null);
         setDevices([]);
@@ -163,6 +186,102 @@ export const ConnectionScreen: React.FC = () => {
                     ) : null
                 }
             />
+            {/* Device Health Panel — shown when connected */}
+            {connectedDevice && (
+                <View style={[styles.healthPanel, isDark ? styles.healthPanelDark : styles.healthPanelLight]}>
+                    <View style={styles.healthTitleRow}>
+                        <SignalIcon color={isDark ? '#AAA' : '#666'} size={18} />
+                        <Text style={[styles.healthTitle, isDark ? styles.titleDark : styles.titleLight]}>
+                            Device Health
+                        </Text>
+                    </View>
+
+                    {/* Signal Strength */}
+                    <View style={styles.healthRow}>
+                        <Text style={[styles.healthLabel, isDark ? styles.subtitleDark : styles.subtitleLight]}>Signal Strength</Text>
+                        <View style={styles.healthRight}>
+                            {(() => {
+                                const rssi = connectedDevice.rssi ?? -90;
+                                const pct = Math.max(0, Math.min(100, ((rssi + 100) / 60) * 100));
+                                const color = pct > 70 ? '#32CD32' : pct > 40 ? '#FFA500' : '#FF4444';
+                                const label = pct > 70 ? 'Good' : pct > 40 ? 'Fair' : 'Weak';
+                                return (
+                                    <>
+                                        <View style={styles.barBg}>
+                                            <View style={[styles.barFill, { width: `${pct}%` as any, backgroundColor: color }]} />
+                                        </View>
+                                        <Text style={[styles.healthValue, { color }]}>{rssi} dBm  {label}</Text>
+                                    </>
+                                );
+                            })()}
+                        </View>
+                    </View>
+
+                    {/* Packet Integrity */}
+                    <View style={styles.healthRow}>
+                        <Text style={[styles.healthLabel, isDark ? styles.subtitleDark : styles.subtitleLight]}>Packet Integrity</Text>
+                        <View style={styles.healthRight}>
+                            {(() => {
+                                const conf = liveReading?.conf ?? 1;
+                                const pct = Math.round(conf * 100);
+                                const color = pct >= 90 ? '#32CD32' : pct >= 70 ? '#FFA500' : '#FF4444';
+                                const label = pct >= 90 ? 'Excellent' : pct >= 70 ? 'Good' : 'Poor';
+                                return (
+                                    <>
+                                        <View style={styles.barBg}>
+                                            <View style={[styles.barFill, { width: `${pct}%` as any, backgroundColor: color }]} />
+                                        </View>
+                                        <Text style={[styles.healthValue, { color }]}>{pct}%  {label}</Text>
+                                    </>
+                                );
+                            })()}
+                        </View>
+                    </View>
+
+                    {/* Battery */}
+                    <View style={styles.healthRow}>
+                        <Text style={[styles.healthLabel, isDark ? styles.subtitleDark : styles.subtitleLight]}>Battery</Text>
+                        <View style={styles.healthRight}>
+                            {(() => {
+                                const bat = liveReading?.bat ?? 100;
+                                const color = bat > 50 ? '#32CD32' : bat > 20 ? '#FFA500' : '#FF4444';
+                                const label = bat > 50 ? 'Normal' : bat > 20 ? 'Low' : 'Critical';
+                                return (
+                                    <>
+                                        <View style={styles.barBg}>
+                                            <View style={[styles.barFill, { width: `${bat}%` as any, backgroundColor: color }]} />
+                                        </View>
+                                        <Text style={[styles.healthValue, { color }]}>{bat}%  {label}</Text>
+                                    </>
+                                );
+                            })()}
+                        </View>
+                    </View>
+
+                    {/* Sensor Quality */}
+                    <View style={styles.healthRow}>
+                        <Text style={[styles.healthLabel, isDark ? styles.subtitleDark : styles.subtitleLight]}>Sensor Quality</Text>
+                        <View style={styles.healthRight}>
+                            {(() => {
+                                const motion = liveReading?.motion ?? 0;
+                                const conf = liveReading?.conf ?? 1;
+                                const quality = motion === 1 ? 'Motion Noise' : conf >= 0.8 ? 'Excellent' : conf >= 0.6 ? 'Good' : 'Poor';
+                                const color = motion === 1 ? '#FFA500' : conf >= 0.8 ? '#32CD32' : conf >= 0.6 ? '#FFD700' : '#FF4444';
+                                const pct = motion === 1 ? 50 : Math.round(conf * 100);
+                                return (
+                                    <>
+                                        <View style={styles.barBg}>
+                                            <View style={[styles.barFill, { width: `${pct}%` as any, backgroundColor: color }]} />
+                                        </View>
+                                        <Text style={[styles.healthValue, { color }]}>{quality}</Text>
+                                    </>
+                                );
+                            })()}
+                        </View>
+                    </View>
+                </View>
+            )}
+
         </View>
     );
 };
@@ -293,5 +412,58 @@ const styles = StyleSheet.create({
     },
     emptyTextDark: {
         color: Colors.text.tertiary.dark,
+    },
+
+    // Device Health Panel
+    healthPanel: {
+        marginTop: spacing.lg,
+        padding: spacing.md,
+        borderRadius: borderRadius.lg,
+        gap: spacing.md,
+    },
+    healthPanelLight: {
+        backgroundColor: Colors.surface.light,
+    },
+    healthPanelDark: {
+        backgroundColor: Colors.surface.dark,
+    },
+    healthTitle: {
+        fontSize: typography.sizes.md,
+        fontWeight: typography.weights.semibold,
+        marginBottom: spacing.xs,
+    },
+    healthTitleRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: spacing.xs,
+        marginBottom: spacing.sm,
+    },
+    healthRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: spacing.sm,
+    },
+    healthLabel: {
+        fontSize: typography.sizes.sm,
+        width: 110,
+    },
+    healthRight: {
+        flex: 1,
+        gap: 4,
+    },
+    barBg: {
+        height: 6,
+        backgroundColor: '#E0E0E0',
+        borderRadius: 3,
+        overflow: 'hidden',
+    },
+    barFill: {
+        height: 6,
+        borderRadius: 3,
+    },
+    healthValue: {
+        fontSize: typography.sizes.xs,
+        fontWeight: typography.weights.medium,
     },
 });

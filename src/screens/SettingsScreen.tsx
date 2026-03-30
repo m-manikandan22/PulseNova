@@ -10,17 +10,16 @@ import {
     StyleSheet,
     ScrollView,
     TouchableOpacity,
-    Switch,
     Alert,
     TextInput,
     useColorScheme,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors } from '../styles/colors';
 import { spacing, typography, borderRadius, shadows } from '../styles/theme';
 import BleManager from '../ble/BleManager';
 import BaselineService from '../services/BaselineService';
 import Database from '../database/db';
-import AuthService from '../services/AuthService';
 import { UserIcon, EditIcon, SaveIcon, SettingsIcon, DisconnectIcon, TrashIcon, DeviceIcon, ActivityIcon } from '../components/SVGIcons';
 
 export const SettingsScreen: React.FC = () => {
@@ -33,19 +32,44 @@ export const SettingsScreen: React.FC = () => {
     const [learningDaysRemaining, setLearningDaysRemaining] = useState(0);
 
     // Profile State
-    const [profile, setProfile] = useState<{ full_name: string; age: string; gender: string; email: string }>({
+    const [profile, setProfile] = useState<{ full_name: string; age: string; gender: string }>({
         full_name: '',
         age: '',
         gender: '',
-        email: ''
     });
     const [isEditing, setIsEditing] = useState(false);
     const [loading, setLoading] = useState(false);
 
+    // Emergency Contact
+    const [emergencyContact, setEmergencyContact] = useState({ name: '', phone: '' });
+    const [editingContact, setEditingContact] = useState(false);
+
     useEffect(() => {
         loadSettings();
         loadProfile();
+        loadEmergencyContact();
     }, []);
+
+    const loadEmergencyContact = async () => {
+        try {
+            const stored = await AsyncStorage.getItem('emergency_contact');
+            if (stored) setEmergencyContact(JSON.parse(stored));
+        } catch (e) { }
+    };
+
+    const saveEmergencyContact = async () => {
+        if (!emergencyContact.name || !emergencyContact.phone) {
+            Alert.alert('Required', 'Please enter both name and phone number');
+            return;
+        }
+        try {
+            await AsyncStorage.setItem('emergency_contact', JSON.stringify(emergencyContact));
+            setEditingContact(false);
+            Alert.alert('Saved', 'Emergency contact saved successfully');
+        } catch (e) {
+            Alert.alert('Error', 'Failed to save emergency contact');
+        }
+    };
 
     const loadSettings = async () => {
         setIsConnected(BleManager.isConnected());
@@ -55,16 +79,18 @@ export const SettingsScreen: React.FC = () => {
     };
 
     const loadProfile = async () => {
-        const { data, error } = await AuthService.getProfile();
-        const session = await AuthService.getSession();
-
-        if (data) {
-            setProfile({
-                full_name: data.full_name || '',
-                age: data.age?.toString() || '',
-                gender: data.gender || '',
-                email: session?.user?.email || ''
-            });
+        try {
+            const stored = await AsyncStorage.getItem('user_profile');
+            if (stored) {
+                const data = JSON.parse(stored);
+                setProfile({
+                    full_name: data.full_name || '',
+                    age: data.age?.toString() || '',
+                    gender: data.gender || '',
+                });
+            }
+        } catch (e) {
+            console.error('Failed to load profile:', e);
         }
     };
 
@@ -75,20 +101,18 @@ export const SettingsScreen: React.FC = () => {
         }
 
         setLoading(true);
-        const { error } = await AuthService.updateProfile({
-            full_name: profile.full_name,
-            age: parseInt(profile.age, 10),
-            gender: profile.gender
-        });
-        setLoading(false);
-
-        if (error) {
-            Alert.alert('Error', 'Failed to update profile');
-        } else {
-            // Reload profile from server to ensure sync
-            await loadProfile();
+        try {
+            await AsyncStorage.setItem('user_profile', JSON.stringify({
+                full_name: profile.full_name,
+                age: parseInt(profile.age, 10),
+                gender: profile.gender,
+            }));
             Alert.alert('Success', 'Profile updated successfully');
             setIsEditing(false);
+        } catch (e) {
+            Alert.alert('Error', 'Failed to update profile');
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -148,9 +172,7 @@ export const SettingsScreen: React.FC = () => {
         );
     };
 
-    const handleSignOut = async () => {
-        await AuthService.signOut();
-    };
+
 
     return (
         <ScrollView style={[
@@ -191,7 +213,7 @@ export const SettingsScreen: React.FC = () => {
                                 {profile.full_name || 'User'}
                             </Text>
                             <Text style={[styles.profileEmail, isDark ? styles.textSecondaryDark : styles.textSecondaryLight]}>
-                                {profile.email}
+                                Local Profile
                             </Text>
                         </View>
                     </View>
@@ -328,6 +350,61 @@ export const SettingsScreen: React.FC = () => {
                 </View>
             </View>
 
+            {/* Emergency Contact Section */}
+            <View style={styles.section}>
+                <View style={styles.sectionHeader}>
+                    <Text style={[styles.sectionTitle, isDark ? styles.sectionTitleDark : styles.sectionTitleLight]}>
+                        Emergency Contact
+                    </Text>
+                    {!editingContact ? (
+                        <TouchableOpacity onPress={() => setEditingContact(true)}>
+                            <Text style={{ color: Colors.primary.light, fontSize: 14 }}>Edit</Text>
+                        </TouchableOpacity>
+                    ) : (
+                        <TouchableOpacity onPress={saveEmergencyContact}>
+                            <Text style={{ color: Colors.success, fontSize: 14, fontWeight: '600' }}>Save</Text>
+                        </TouchableOpacity>
+                    )}
+                </View>
+
+                <View style={[styles.card, isDark ? styles.cardDark : styles.cardLight, shadows.sm]}>
+                    {editingContact ? (
+                        <View style={styles.form}>
+                            <Text style={[styles.label, isDark ? styles.textSecondaryDark : styles.textSecondaryLight]}>Contact Name</Text>
+                            <TextInput
+                                style={[styles.input, isDark ? styles.inputDark : styles.inputLight]}
+                                value={emergencyContact.name}
+                                placeholder="e.g. John Doe"
+                                placeholderTextColor="#999"
+                                onChangeText={t => setEmergencyContact({ ...emergencyContact, name: t })}
+                            />
+                            <Text style={[styles.label, isDark ? styles.textSecondaryDark : styles.textSecondaryLight]}>Phone Number</Text>
+                            <TextInput
+                                style={[styles.input, isDark ? styles.inputDark : styles.inputLight]}
+                                value={emergencyContact.phone}
+                                placeholder="e.g. +91 9876543210"
+                                placeholderTextColor="#999"
+                                keyboardType="phone-pad"
+                                onChangeText={t => setEmergencyContact({ ...emergencyContact, phone: t })}
+                            />
+                        </View>
+                    ) : emergencyContact.name ? (
+                        <View>
+                            <Text style={[styles.cardValue, isDark ? styles.cardValueDark : styles.cardValueLight]}>
+                                Name: {emergencyContact.name}
+                            </Text>
+                            <Text style={[styles.cardLabel, isDark ? styles.cardLabelDark : styles.cardLabelLight, { marginTop: 4 }]}>
+                                Phone: {emergencyContact.phone}
+                            </Text>
+                        </View>
+                    ) : (
+                        <Text style={[styles.cardLabel, isDark ? styles.cardLabelDark : styles.cardLabelLight]}>
+                            No emergency contact set. Tap Edit to add one.
+                        </Text>
+                    )}
+                </View>
+            </View>
+
             {/* Medical Disclaimer */}
             <View style={styles.section}>
                 <View style={[
@@ -366,17 +443,6 @@ export const SettingsScreen: React.FC = () => {
                     <Text style={styles.dangerText}>Clear All Data</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                    style={[
-                        styles.card,
-                        isDark ? styles.cardDark : styles.cardLight,
-                        shadows.sm,
-                        { marginTop: 10, alignItems: 'center' }
-                    ]}
-                    onPress={handleSignOut}
-                >
-                    <Text style={{ color: Colors.primary.light }}>Sign Out</Text>
-                </TouchableOpacity>
             </View>
 
             {/* About */}

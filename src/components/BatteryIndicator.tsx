@@ -1,5 +1,6 @@
 /**
  * Battery Indicator Component
+ * Shows watch battery level as a colored bar + percentage
  */
 
 import React from 'react';
@@ -20,17 +21,16 @@ export const BatteryIndicator: React.FC<BatteryIndicatorProps> = ({ level, isDar
         return Colors.battery.low;
     };
 
-    const getBatteryIcon = () => {
-        if (level > 75) return '🔋';
-        if (level > 50) return '🔋';
-        if (level > 20) return '🔋';
-        return '🪫';
-    };
+    const color = getBatteryColor();
+    const fillWidth = Math.min(Math.max(level, 0), 100);
 
     return (
         <View style={styles.container}>
-            <Text style={styles.icon}>{getBatteryIcon()}</Text>
-            <Text style={[styles.text, { color: getBatteryColor() }]}>
+            <Text style={[styles.label, { color: isDark ? '#AAA' : '#666' }]}>BAT</Text>
+            <View style={styles.batteryShell}>
+                <View style={[styles.batteryFill, { width: `${fillWidth}%` as any, backgroundColor: color }]} />
+            </View>
+            <Text style={[styles.text, { color }]}>
                 {formatBattery(level)}
             </Text>
         </View>
@@ -41,13 +41,28 @@ const styles = StyleSheet.create({
     container: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: spacing.xs,
+        gap: 6,
     },
-    icon: {
-        fontSize: typography.sizes.md,
+    label: {
+        fontSize: 10,
+        fontWeight: '700',
+        letterSpacing: 0.5,
+    },
+    batteryShell: {
+        width: 28,
+        height: 12,
+        borderRadius: 3,
+        borderWidth: 1.5,
+        borderColor: '#555',
+        overflow: 'hidden',
+        justifyContent: 'center',
+    },
+    batteryFill: {
+        height: '100%',
+        borderRadius: 1.5,
     },
     text: {
         fontSize: typography.sizes.sm,
-        fontWeight: typography.weights.medium,
+        fontWeight: '600',
     },
 });

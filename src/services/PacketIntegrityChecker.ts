@@ -39,7 +39,7 @@ class PacketIntegrityChecker {
             }
 
             if (timeSinceLastPacket > this.MAX_TIME_GAP_MS) {
-                console.warn(`Large time gap detected: ${timeSinceLastPacket}ms`);
+                // Large time gap is expected with 5s BLE intervals — silent
                 // Don't reject, but log for monitoring
             }
         }

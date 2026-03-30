@@ -1,3 +1,1 @@
-export * from './LoginScreen';
-export * from './SignupScreen';
-export * from './ForgotPasswordScreen';
+// This file has been intentionally emptied — auth removed.

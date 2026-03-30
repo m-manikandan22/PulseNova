@@ -1,50 +1,23 @@
 /**
  * Root Navigator
- * Orchestrates navigation based on Global State (Auth + Device)
+ * Orchestrates navigation based on Device connection state
+ * No auth required — app is fully local
  */
 
 import React from 'react';
-import { View, ActivityIndicator, StyleSheet } from 'react-native';
-import { useAuth } from '../contexts/AuthContext';
 import { useDevice } from '../contexts/DeviceContext';
 import { ConnectionScreen } from '../screens/ConnectionScreen';
 import { AppNavigator } from './AppNavigator';
-
-import { AuthNavigator } from './AuthNavigator';
-
-// Placeholder for AuthStack removed
-// const AuthStack = ...
+import { DEV_MODE } from '../core/constants';
 
 export const RootNavigator: React.FC = () => {
-    const { session, isLoading: authLoading } = useAuth();
     const { isConnected } = useDevice();
 
-    if (authLoading) {
-        return (
-            <View style={styles.center}>
-                <ActivityIndicator size="large" />
-            </View>
-        );
-    }
-
-    // AUTH CHECK: Gatekeeper
-    if (!session) {
-        return <AuthNavigator />;
-    }
-
-    // DEVICE CONNECTION CHECK
-    if (!isConnected) {
+    // DEVICE CONNECTION CHECK (Skip in DEV_MODE)
+    if (!DEV_MODE && !isConnected) {
         return <ConnectionScreen />;
     }
 
     // MAIN APP
     return <AppNavigator />;
 };
-
-const styles = StyleSheet.create({
-    center: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-});

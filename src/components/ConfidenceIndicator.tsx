@@ -1,13 +1,14 @@
 /**
  * Confidence Indicator Component
- * Shows signal quality with warnings for low confidence
+ * Shows signal quality as colored dots (like Wi-Fi bars)
  */
 
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Colors } from '../styles/colors';
 import { spacing, typography } from '../styles/theme';
-import { formatConfidence, hasGoodSignalQuality } from '../utils/validation';
+import { formatConfidence } from '../utils/formatter';
+import { hasGoodSignalQuality } from '../utils/validation';
 
 interface ConfidenceIndicatorProps {
     confidence: number;
@@ -24,19 +25,27 @@ export const ConfidenceIndicator: React.FC<ConfidenceIndicatorProps> = ({
         return Colors.signal.poor;
     };
 
-    const getSignalIcon = () => {
-        if (confidence >= 0.8) return '📶';
-        if (confidence >= 0.6) return '📶';
-        return '📵';
-    };
-
+    const color = getSignalColor();
+    const bars = confidence >= 0.8 ? 3 : confidence >= 0.6 ? 2 : 1;
     const isGoodQuality = hasGoodSignalQuality(confidence);
 
     return (
         <View style={styles.container}>
             <View style={styles.indicator}>
-                <Text style={styles.icon}>{getSignalIcon()}</Text>
-                <Text style={[styles.text, { color: getSignalColor() }]}>
+                <Text style={[styles.label, { color: isDark ? '#AAA' : '#666' }]}>SIG</Text>
+                <View style={styles.barsRow}>
+                    {[1, 2, 3].map(i => (
+                        <View
+                            key={i}
+                            style={[
+                                styles.bar,
+                                { height: 4 + i * 4 },
+                                i <= bars ? { backgroundColor: color } : { backgroundColor: isDark ? '#333' : '#DDD' },
+                            ]}
+                        />
+                    ))}
+                </View>
+                <Text style={[styles.text, { color }]}>
                     {formatConfidence(confidence)}
                 </Text>
             </View>
@@ -44,7 +53,7 @@ export const ConfidenceIndicator: React.FC<ConfidenceIndicatorProps> = ({
             {!isGoodQuality && (
                 <View style={[styles.warning, isDark && styles.warningDark]}>
                     <Text style={[styles.warningText, isDark && styles.warningTextDark]}>
-                        Low Signal Quality — Measurement may be unreliable
+                        Low signal - readings may be less accurate
                     </Text>
                 </View>
             )}
@@ -59,14 +68,25 @@ const styles = StyleSheet.create({
     indicator: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: spacing.xs,
+        gap: 6,
     },
-    icon: {
-        fontSize: typography.sizes.md,
+    label: {
+        fontSize: 10,
+        fontWeight: '700',
+        letterSpacing: 0.5,
+    },
+    barsRow: {
+        flexDirection: 'row',
+        alignItems: 'flex-end',
+        gap: 2,
+    },
+    bar: {
+        width: 4,
+        borderRadius: 1,
     },
     text: {
         fontSize: typography.sizes.sm,
-        fontWeight: typography.weights.medium,
+        fontWeight: '600',
     },
     warning: {
         backgroundColor: Colors.warning + '20',

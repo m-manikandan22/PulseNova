@@ -9,7 +9,8 @@ import { DashboardScreen } from '../screens/DashboardScreen';
 import { HistoryScreen } from '../screens/HistoryScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { Colors } from '../styles/colors';
-import { useColorScheme, Text } from 'react-native';
+import { useColorScheme } from 'react-native';
+import { ActivityIcon, ClockIcon, SettingsIcon, HeartPulseIcon } from '../components/SVGIcons';
 
 const Tab = createBottomTabNavigator();
 
@@ -41,7 +42,7 @@ export const AppNavigator: React.FC = () => {
                 component={DashboardScreen}
                 options={{
                     tabBarLabel: 'Dashboard',
-                    tabBarIcon: () => <Text>📊</Text>,
+                    tabBarIcon: ({ color, size }) => <HeartPulseIcon color={color} size={size} />,
                 }}
             />
             <Tab.Screen
@@ -49,7 +50,7 @@ export const AppNavigator: React.FC = () => {
                 component={HistoryScreen}
                 options={{
                     tabBarLabel: 'History',
-                    tabBarIcon: () => <Text>📜</Text>,
+                    tabBarIcon: ({ color, size }) => <ClockIcon color={color} size={size} />,
                 }}
             />
             <Tab.Screen
@@ -57,7 +58,7 @@ export const AppNavigator: React.FC = () => {
                 component={SettingsScreen}
                 options={{
                     tabBarLabel: 'Settings',
-                    tabBarIcon: () => <Text>⚙️</Text>,
+                    tabBarIcon: ({ color, size }) => <SettingsIcon color={color} size={size} />,
                 }}
             />
         </Tab.Navigator>

@@ -10,9 +10,14 @@ import { spacing, typography } from '../styles/theme';
 
 interface EmergencyBannerProps {
     isDark?: boolean;
+    visible?: boolean;
 }
 
-export const EmergencyBanner: React.FC<EmergencyBannerProps> = ({ isDark = true }) => {
+export const EmergencyBanner: React.FC<EmergencyBannerProps> = ({ isDark = true, visible = true }) => {
+    if (!visible) {
+        return null;
+    }
+
     return (
         <View style={[styles.container, isDark && styles.containerDark]}>
             <Text style={[styles.icon, isDark && styles.iconDark]}>⚠️</Text>

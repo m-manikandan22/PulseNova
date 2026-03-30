@@ -6,9 +6,10 @@ import { HealthReading } from '../ble/types';
 
 /**
  * Validate heart rate is within acceptable range
+ * MAX30105 can report low values during warm-up, so we accept 20+
  */
 export function isValidHeartRate(hr: number): boolean {
-    return hr >= 30 && hr <= 220;
+    return hr >= 20 && hr <= 250;
 }
 
 /**
@@ -24,10 +25,12 @@ export function isValidBloodPressure(sys: number, dia: number): boolean {
 }
 
 /**
- * Validate HRV is within acceptable range
+ * Validate HRV / R-R interval is within acceptable range
+ * ESP32 sends raw inter-beat interval (IBI) in ms, not calculated RMSSD.
+ * Normal IBI: 300ms (200bpm) to 2000ms (30bpm)
  */
 export function isValidHRV(hrv: number): boolean {
-    return hrv >= 0 && hrv <= 200;
+    return hrv >= 0 && hrv <= 2000;
 }
 
 /**
@@ -76,27 +79,22 @@ export function validateHealthReading(reading: any): reading is HealthReading {
 
     // Validate ranges
     if (!isValidHeartRate(hr)) {
-        console.warn(`Invalid heart rate: ${hr}`);
         return false;
     }
 
     if (!isValidHRV(hrv)) {
-        console.warn(`Invalid HRV: ${hrv}`);
         return false;
     }
 
     if (!isValidBloodPressure(bp_sys, bp_dia)) {
-        console.warn(`Invalid blood pressure: ${bp_sys}/${bp_dia}`);
         return false;
     }
 
     if (!isValidConfidence(conf)) {
-        console.warn(`Invalid confidence: ${conf}`);
         return false;
     }
 
     if (!isValidBattery(bat)) {
-        console.warn(`Invalid battery: ${bat}`);
         return false;
     }
 
@@ -105,7 +103,10 @@ export function validateHealthReading(reading: any): reading is HealthReading {
 
 /**
  * Check if motion artifact is present
+ * ESP32 sends raw accelerometer magnitude in m/s².
+ * At rest (gravity only) ≈ 9.8, significant movement ≈ 12+.
+ * Threshold 12.0 = movement that degrades PPG signal.
  */
 export function hasMotionArtifact(motion: number): boolean {
-    return motion === 1;
+    return motion >= 12.0;
 }

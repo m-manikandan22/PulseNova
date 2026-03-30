@@ -3,12 +3,13 @@
  * Critical modal for Hypertensive Crisis / High Stroke Risk
  */
 
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, Dimensions } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, Dimensions, Alert, Linking } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors } from '../styles/colors';
 import { spacing, typography, borderRadius } from '../styles/theme';
 import { BPCategory, RiskLevel } from '../ble/types';
-import { useNavigation } from '@react-navigation/native';
+import { AlertTriangleIcon, PhoneIcon, SirenIcon } from '../components/SVGIcons';
 
 interface CrisisAlertProps {
     visible: boolean;
@@ -21,10 +22,27 @@ const { width } = Dimensions.get('window');
 
 export const CrisisAlertScreen: React.FC<CrisisAlertProps> = ({ visible, onClose, sys, dia }) => {
 
+    const [emergencyContact, setEmergencyContact] = useState<{ name: string; phone: string } | null>(null);
+
+    useEffect(() => {
+        if (visible) {
+            AsyncStorage.getItem('emergency_contact').then(stored => {
+                if (stored) setEmergencyContact(JSON.parse(stored));
+            }).catch(() => { });
+        }
+    }, [visible]);
+
     const handleEmergencyCall = () => {
-        // In a real app, this would trigger Linking.openURL('tel:911')
-        console.log('Calling Emergency Services...');
-        alert('Calling Emergency Services...');
+        Linking.openURL('tel:112').catch(() =>
+            Alert.alert('Error', 'Unable to make call from this device')
+        );
+    };
+
+    const handleContactCall = () => {
+        if (!emergencyContact?.phone) return;
+        Linking.openURL(`tel:${emergencyContact.phone}`).catch(() =>
+            Alert.alert('Error', 'Unable to make call from this device')
+        );
     };
 
     return (
@@ -39,7 +57,9 @@ export const CrisisAlertScreen: React.FC<CrisisAlertProps> = ({ visible, onClose
 
                     {/* Header */}
                     <View style={styles.header}>
-                        <Text style={styles.warningIcon}>⚠️</Text>
+                        <View style={styles.warningIconWrap}>
+                            <AlertTriangleIcon color="#FFFFFF" size={40} />
+                        </View>
                         <Text style={styles.modalTitle}>HYPERTENSIVE CRISIS</Text>
                         <Text style={styles.reading}>{sys} / {dia}</Text>
                         <Text style={styles.subtitle}>Seek Medical Care Immediately</Text>
@@ -90,8 +110,16 @@ export const CrisisAlertScreen: React.FC<CrisisAlertProps> = ({ visible, onClose
                     {/* Footer Actions */}
                     <View style={styles.footer}>
                         <TouchableOpacity style={styles.emergencyButton} onPress={handleEmergencyCall}>
-                            <Text style={styles.emergencyText}>🚨 CALL EMERGENCY</Text>
+                            <SirenIcon color="#FFF" size={18} />
+                            <Text style={styles.emergencyText}>CALL EMERGENCY (112)</Text>
                         </TouchableOpacity>
+
+                        {emergencyContact && (
+                            <TouchableOpacity style={[styles.emergencyButton, { backgroundColor: '#1565C0', marginTop: 8 }]} onPress={handleContactCall}>
+                                <PhoneIcon color="#FFF" size={18} />
+                                <Text style={styles.emergencyText}>Call {emergencyContact.name}</Text>
+                            </TouchableOpacity>
+                        )}
 
                         <TouchableOpacity style={styles.dismissButton} onPress={onClose}>
                             <Text style={styles.dismissText}>I Understand</Text>
@@ -128,8 +156,7 @@ const styles = StyleSheet.create({
         padding: spacing.lg,
         alignItems: 'center',
     },
-    warningIcon: {
-        fontSize: 40,
+    warningIconWrap: {
         marginBottom: spacing.xs,
     },
     modalTitle: {
@@ -205,9 +232,13 @@ const styles = StyleSheet.create({
     emergencyButton: {
         backgroundColor: '#D32F2F',
         paddingVertical: spacing.md,
+        paddingHorizontal: spacing.md,
         borderRadius: borderRadius.md,
         alignItems: 'center',
         marginBottom: spacing.md,
+        flexDirection: 'row',
+        justifyContent: 'center',
+        gap: spacing.sm,
     },
     emergencyText: {
         color: '#FFF',

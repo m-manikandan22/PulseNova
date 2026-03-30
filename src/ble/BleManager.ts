@@ -9,6 +9,7 @@ import { validateHealthReading } from '../utils/validation';
 import { Buffer } from 'buffer';
 
 const TARGET_SERVICE_UUID = '12345678-1234-1234-1234-1234567890ab';
+const TIME_CHAR_UUID = 'c0ffee01-1234-1234-1234-1234567890ab';
 const DEVICE_NAME_PREFIX = 'PulseNova';
 
 type ConnectionCallback = (status: ConnectionStatus) => void;
@@ -254,7 +255,7 @@ class BLEManager {
             const data = JSON.parse(jsonString) as HealthReading;
 
             if (!validateHealthReading(data)) {
-                console.warn('Dropping invalid reading');
+                // Invalid reading silently dropped
                 return;
             }
 
@@ -270,19 +271,24 @@ class BLEManager {
      * Sync time
      */
     private async syncTime(): Promise<void> {
-        if (!this.device || !this.activeServiceUUID || !this.activeCharacteristicUUID) return;
+        if (!this.device || !this.activeServiceUUID) return;
 
         try {
-            const timestamp = Math.floor(Date.now() / 1000);
-            const payload = JSON.stringify({ time: timestamp });
+            // Send LOCAL time (UTC + timezone offset) so the watch clock matches the phone
+            const now = new Date();
+            const utcSeconds = Math.floor(now.getTime() / 1000);
+            const tzOffsetSeconds = -now.getTimezoneOffset() * 60; // getTimezoneOffset returns minutes BEHIND UTC, negate it
+            const localTimestamp = utcSeconds + tzOffsetSeconds;
+
+            const payload = JSON.stringify({ time: localTimestamp });
             const base64 = Buffer.from(payload).toString('base64');
 
             await this.device.writeCharacteristicWithResponseForService(
                 this.activeServiceUUID,
-                this.activeCharacteristicUUID,
+                TIME_CHAR_UUID,
                 base64
             );
-            console.log('Time synced successfully');
+            console.log('Time synced:', localTimestamp, '(offset:', tzOffsetSeconds, 's)');
         } catch (error) {
             console.warn('Time sync failed - continuing execution', error);
         }

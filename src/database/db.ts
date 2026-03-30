@@ -4,6 +4,24 @@
 
 import SQLite, { Transaction, SQLiteDatabase } from 'react-native-sqlite-storage';
 import { StoredReading, Baseline, HealthReading } from '../ble/types';
+
+// ─── Aggregated type (chart layer) ───────────────────────────────────────────
+export interface AggregatedReading {
+    bucket: number;       // bucket start timestamp (ms)
+    avg_hr: number;
+    avg_hrv: number;
+    avg_bp_sys: number;
+    avg_bp_dia: number;
+    min_hr: number;
+    max_hr: number;
+    min_bp_sys: number;
+    max_bp_sys: number;
+    min_bp_dia: number;
+    max_bp_dia: number;
+    min_hrv: number;
+    max_hrv: number;
+    count: number;        // raw readings aggregated in this bucket
+}
 import {
     CREATE_READINGS_TABLE,
     CREATE_BASELINE_TABLE,
@@ -17,22 +35,61 @@ const RETENTION_DAYS = 30;
 
 class Database {
     private db: SQLiteDatabase | null = null;
+    // Promise lock — all concurrent callers await the same open()
+    private initializationPromise: Promise<void> | null = null;
 
     /**
-     * Initialize database
+     * Initialize database.
+     * Safe to call multiple times and from multiple callers simultaneously.
+     * Concurrent calls all wait on the same in-flight promise.
      */
     async initialize(): Promise<void> {
-        try {
-            this.db = await SQLite.openDatabase({
-                name: DATABASE_NAME,
-                location: 'default',
-            });
+        // Already open — done
+        if (this.db) return;
 
-            await this.createTables();
-            console.log('Database initialized successfully');
-        } catch (error) {
-            console.error('Database initialization failed:', error);
-            throw error;
+        // In-progress — join the existing promise instead of opening again
+        if (this.initializationPromise) {
+            return this.initializationPromise;
+        }
+
+        // First caller — start the open and store the promise
+        this.initializationPromise = (async () => {
+            try {
+                this.db = await SQLite.openDatabase({
+                    name: DATABASE_NAME,
+                    location: 'default',
+                });
+                await this.createTables();
+                console.log('Database initialized successfully');
+            } catch (error) {
+                // Reset so initialize() can be retried after a failure
+                this.initializationPromise = null;
+                console.error('Database initialization failed:', error);
+                throw error;
+            }
+        })();
+
+        return this.initializationPromise;
+    }
+
+    /**
+     * Returns true if the database connection is open
+     */
+    isInitialized(): boolean {
+        return this.db !== null;
+    }
+
+    /**
+     * Ensure DB is initialized before any operation — never warns in production.
+     * Calling this is a no-op if already open.
+     */
+    async ensureInitialized(): Promise<void> {
+        if (!this.db) {
+            // Only log in dev if we're starting a fresh init (no lock yet)
+            if (__DEV__ && !this.initializationPromise) {
+                console.warn('DB not initialized — auto-initializing now');
+            }
+            await this.initialize();
         }
     }
 
@@ -42,6 +99,21 @@ class Database {
     private async createTables(): Promise<void> {
         if (!this.db) throw new Error('Database not initialized');
 
+        // Migration: if old table has is_synced column, drop and recreate
+        try {
+            const pragma = await this.db.executeSql('PRAGMA table_info(readings)');
+            const columns = [];
+            for (let i = 0; i < pragma[0].rows.length; i++) {
+                columns.push(pragma[0].rows.item(i).name);
+            }
+            if (columns.includes('is_synced')) {
+                console.log('Migrating: dropping old readings table with is_synced column');
+                await this.db.executeSql('DROP TABLE IF EXISTS readings');
+            }
+        } catch (e) {
+            // Table doesn't exist yet — fine
+        }
+
         await this.db.executeSql(CREATE_READINGS_TABLE);
         await this.db.executeSql(CREATE_BASELINE_TABLE);
         await this.db.executeSql(CREATE_READINGS_INDEX);
@@ -50,27 +122,26 @@ class Database {
     /**
      * Insert a new reading
      */
-    async insertReading(reading: HealthReading): Promise<number> {
-        if (!this.db) {
-            console.warn('DB not initialized');
-            return -1;
-        }
+    async insertReading(reading: HealthReading, userId: string): Promise<number> {
+        await this.ensureInitialized();
+        if (!this.db) return -1;
 
-        const timestamp = reading.timestamp || Date.now();
+        const timestamp = Date.now();
 
         // Prevent exact duplicates (simple check)
         const check = await this.db.executeSql(
-            'SELECT id FROM readings WHERE timestamp = ? LIMIT 1',
-            [timestamp]
+            'SELECT id FROM readings WHERE user_id = ? AND timestamp = ? LIMIT 1',
+            [userId, timestamp]
         );
         if (check[0].rows.length > 0) {
             return check[0].rows.item(0).id;
         }
 
         const result = await this.db.executeSql(
-            `INSERT INTO readings (timestamp, hr, hrv, bp_sys, bp_dia, confidence, motion, battery, is_synced)
+            `INSERT INTO readings (user_id, timestamp, hr, hrv, bp_sys, bp_dia, confidence, motion, battery)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
+                userId,
                 timestamp,
                 reading.hr,
                 reading.hrv,
@@ -79,7 +150,6 @@ class Database {
                 reading.conf || 0,
                 reading.motion || 0,
                 reading.bat || 0,
-                0 // Default: Not synced
             ]
         );
 
@@ -87,22 +157,24 @@ class Database {
     }
 
     /**
-     * Import reading from Cloud (already synced)
+     * Import a reading with an explicit timestamp (e.g. from device history)
      */
-    async importReading(reading: StoredReading): Promise<void> {
+    async importReading(reading: StoredReading, userId: string): Promise<void> {
+        await this.ensureInitialized();
         if (!this.db) return;
 
-        // Check existence
+        // Check existence based on user_id and timestamp
         const check = await this.db.executeSql(
-            'SELECT id FROM readings WHERE timestamp = ? LIMIT 1',
-            [reading.timestamp]
+            'SELECT id FROM readings WHERE user_id = ? AND timestamp = ? LIMIT 1',
+            [userId, reading.timestamp]
         );
         if (check[0].rows.length > 0) return;
 
         await this.db.executeSql(
-            `INSERT INTO readings (timestamp, hr, hrv, bp_sys, bp_dia, confidence, motion, battery, is_synced)
+            `INSERT INTO readings (user_id, timestamp, hr, hrv, bp_sys, bp_dia, confidence, motion, battery)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
+                userId,
                 reading.timestamp,
                 reading.hr,
                 reading.hrv,
@@ -111,22 +183,21 @@ class Database {
                 reading.conf,
                 reading.motion,
                 reading.bat,
-                1 // IMPORTED = Synced!
             ]
         );
     }
 
     /**
-     * Get readings within a time range
+     * Get readings within a time range for a specific user
      */
-    async getReadings(startTime: number, endTime: number): Promise<StoredReading[]> {
-        if (!this.db) throw new Error('Database not initialized');
+    async getReadings(userId: string, startTime: number, endTime: number): Promise<StoredReading[]> {
+        await this.ensureInitialized();
 
-        const result = await this.db.executeSql(
+        const result = await this.db!.executeSql(
             `SELECT * FROM readings 
-       WHERE timestamp >= ? AND timestamp <= ?
+       WHERE user_id = ? AND timestamp >= ? AND timestamp <= ?
        ORDER BY timestamp DESC`,
-            [startTime, endTime]
+            [userId, startTime, endTime]
         );
 
         const readings: StoredReading[] = [];
@@ -149,16 +220,17 @@ class Database {
     }
 
     /**
-     * Get latest N readings
+     * Get latest N readings for a specific user
      */
-    async getLatestReadings(limit: number = 100): Promise<StoredReading[]> {
-        if (!this.db) throw new Error('Database not initialized');
+    async getLatestReadings(userId: string, limit: number = 100): Promise<StoredReading[]> {
+        await this.ensureInitialized();
 
-        const result = await this.db.executeSql(
+        const result = await this.db!.executeSql(
             `SELECT * FROM readings 
+       WHERE user_id = ?
        ORDER BY timestamp DESC 
        LIMIT ?`,
-            [limit]
+            [userId, limit]
         );
 
         const readings: StoredReading[] = [];
@@ -178,20 +250,96 @@ class Database {
         }
 
         return readings;
+    }
+
+    /**
+     * Get aggregated chart data using SQLite GROUP BY time buckets.
+     *
+     * @param userId   current user
+     * @param startMs  window start (JS milliseconds)
+     * @param endMs    window end   (JS milliseconds)
+     * @param bucketMs bucket size  (e.g. 300_000 = 5 min, 3_600_000 = 1 hr)
+     *
+     * Returns one row per bucket — dramatically fewer points than raw rows.
+     * Resolution examples:
+     *   1H  → bucketMs=60_000   → max  60 points
+     *   24H → bucketMs=300_000  → max 288 points
+     *   7D  → bucketMs=3_600_000 → max 168 points
+     */
+    async getChartData(
+        userId: string,
+        startMs: number,
+        endMs: number,
+        bucketMs: number,
+    ): Promise<AggregatedReading[]> {
+        await this.ensureInitialized();
+        if (!this.db) return [];
+
+        const result = await this.db.executeSql(
+            `SELECT
+               (timestamp / ?) * ? AS bucket,
+               ROUND(AVG(hr),  1)     AS avg_hr,
+               ROUND(AVG(hrv), 1)     AS avg_hrv,
+               ROUND(AVG(bp_sys), 1)  AS avg_bp_sys,
+               ROUND(AVG(bp_dia), 1)  AS avg_bp_dia,
+               MIN(hr)                AS min_hr,
+               MAX(hr)                AS max_hr,
+               MIN(bp_sys)            AS min_bp_sys,
+               MAX(bp_sys)            AS max_bp_sys,
+               MIN(bp_dia)            AS min_bp_dia,
+               MAX(bp_dia)            AS max_bp_dia,
+               MIN(hrv)               AS min_hrv,
+               MAX(hrv)               AS max_hrv,
+               COUNT(*)               AS count
+             FROM readings
+             WHERE user_id = ?
+               AND timestamp >= ?
+               AND timestamp <= ?
+             GROUP BY bucket
+             ORDER BY bucket ASC`,
+            [bucketMs, bucketMs, userId, startMs, endMs],
+        );
+
+        const rows = result[0].rows;
+        const out: AggregatedReading[] = [];
+        for (let i = 0; i < rows.length; i++) {
+            const r = rows.item(i);
+            out.push({
+                bucket: r.bucket,
+                avg_hr: r.avg_hr,
+                avg_hrv: r.avg_hrv,
+                avg_bp_sys: r.avg_bp_sys,
+                avg_bp_dia: r.avg_bp_dia,
+                min_hr: r.min_hr,
+                max_hr: r.max_hr,
+                min_bp_sys: r.min_bp_sys,
+                max_bp_sys: r.max_bp_sys,
+                min_bp_dia: r.min_bp_dia,
+                max_bp_dia: r.max_bp_dia,
+                min_hrv: r.min_hrv,
+                max_hrv: r.max_hrv,
+                count: r.count,
+            });
+        }
+
+        console.log(`DB.getChartData: ${out.length} buckets (${startMs}-${endMs}, bucket=${bucketMs}ms)`);
+        return out;
     }
 
     /**
      * Insert multiple readings in a transaction (Batch)
      */
-    async insertReadings(readings: StoredReading[]): Promise<void> {
+    async insertReadings(readings: StoredReading[], userId: string): Promise<void> {
+        await this.ensureInitialized();
         if (!this.db) throw new Error('Database not initialized');
 
-        await this.db.transaction(async (tx: Transaction) => {
+        await this.db!.transaction(async (tx: Transaction) => {
             for (const reading of readings) {
                 await tx.executeSql(
-                    `INSERT INTO readings (timestamp, hr, hrv, bp_sys, bp_dia, confidence, motion, battery)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                    `INSERT OR IGNORE INTO readings (user_id, timestamp, hr, hrv, bp_sys, bp_dia, confidence, motion, battery)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                     [
+                        userId,
                         reading.timestamp,
                         reading.hr,
                         reading.hrv,
@@ -209,18 +357,19 @@ class Database {
     /**
      * Get readings for baseline calculation (first 7 days, excluding motion artifacts)
      */
-    async getBaselineReadings(startDate: number): Promise<StoredReading[]> {
+    async getBaselineReadings(userId: string, startDate: number): Promise<StoredReading[]> {
+        await this.ensureInitialized();
         if (!this.db) throw new Error('Database not initialized');
 
         const endDate = startDate + 7 * 24 * 60 * 60 * 1000; // 7 days
 
         const result = await this.db.executeSql(
             `SELECT * FROM readings 
-       WHERE timestamp >= ? AND timestamp <= ?
-       AND motion = 0
+       WHERE user_id = ? AND timestamp >= ? AND timestamp <= ?
+       AND motion < 12.0
        AND confidence >= 0.6
        ORDER BY timestamp ASC`,
-            [startDate, endDate]
+            [userId, startDate, endDate]
         );
 
         const readings: StoredReading[] = [];
@@ -243,15 +392,17 @@ class Database {
     }
 
     /**
-     * Save baseline
+     * Save baseline for a specific user
      */
-    async saveBaseline(baseline: Baseline): Promise<void> {
+    async saveBaseline(userId: string, baseline: Baseline): Promise<void> {
+        await this.ensureInitialized();
         if (!this.db) throw new Error('Database not initialized');
 
         await this.db.executeSql(
-            `INSERT OR REPLACE INTO baseline (id, avg_resting_hr, avg_hrv, avg_bp_sys, avg_bp_dia, baseline_start_date)
-       VALUES (1, ?, ?, ?, ?, ?)`,
+            `INSERT OR REPLACE INTO baseline (user_id, avg_resting_hr, avg_hrv, avg_bp_sys, avg_bp_dia, baseline_start_date)
+       VALUES (?, ?, ?, ?, ?, ?)`,
             [
+                userId,
                 baseline.avg_resting_hr,
                 baseline.avg_hrv,
                 baseline.avg_bp_sys,
@@ -262,12 +413,13 @@ class Database {
     }
 
     /**
-     * Get baseline
+     * Get baseline for a specific user
      */
-    async getBaseline(): Promise<Baseline | null> {
+    async getBaseline(userId: string): Promise<Baseline | null> {
+        await this.ensureInitialized();
         if (!this.db) throw new Error('Database not initialized');
 
-        const result = await this.db.executeSql('SELECT * FROM baseline WHERE id = 1');
+        const result = await this.db.executeSql('SELECT * FROM baseline WHERE user_id = ?', [userId]);
 
         if (result[0].rows.length === 0) {
             return null;
@@ -284,101 +436,63 @@ class Database {
     }
 
     /**
-     * Delete baseline
+     * Delete baseline for a specific user
      */
-    async deleteBaseline(): Promise<void> {
+    async deleteBaseline(userId: string): Promise<void> {
+        await this.ensureInitialized();
         if (!this.db) throw new Error('Database not initialized');
-        await this.db.executeSql('DELETE FROM baseline WHERE id = 1');
+        await this.db.executeSql('DELETE FROM baseline WHERE user_id = ?', [userId]);
     }
 
     /**
-     * Clean up old readings (older than RETENTION_DAYS)
+     * Clean up old readings for a specific user (older than RETENTION_DAYS)
      */
-    async cleanupOldReadings(): Promise<number> {
+    async cleanupOldReadings(userId: string): Promise<number> {
+        await this.ensureInitialized();
         if (!this.db) throw new Error('Database not initialized');
 
         const cutoffTime = Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
         const result = await this.db.executeSql(
-            'DELETE FROM readings WHERE timestamp < ?',
-            [cutoffTime]
+            'DELETE FROM readings WHERE user_id = ? AND timestamp < ?',
+            [userId, cutoffTime]
         );
 
         return result[0].rowsAffected;
     }
 
-    /**
-     * Get unsynced readings for cloud upload
-     */
-    async getUnsyncedReadings(limit: number = 50): Promise<StoredReading[]> {
-        if (!this.db) throw new Error('Database not initialized');
 
-        const result = await this.db.executeSql(
-            `SELECT * FROM readings 
-             WHERE is_synced = 0 
-             ORDER BY timestamp ASC 
-             LIMIT ?`,
-            [limit]
-        );
-
-        const readings: StoredReading[] = [];
-        for (let i = 0; i < result[0].rows.length; i++) {
-            const row = result[0].rows.item(i);
-            readings.push({
-                id: row.id,
-                timestamp: row.timestamp,
-                hr: row.hr,
-                hrv: row.hrv,
-                bp_sys: row.bp_sys,
-                bp_dia: row.bp_dia,
-                conf: row.confidence,
-                motion: row.motion,
-                bat: row.battery,
-            });
-        }
-        return readings;
-    }
 
     /**
-     * Mark readings as synced after successful upload
+     * Get total reading count for a specific user
      */
-    async markReadingsAsSynced(ids: number[]): Promise<void> {
-        if (!this.db) throw new Error('Database not initialized');
-        if (ids.length === 0) return;
-
-        const placeholders = ids.map(() => '?').join(',');
-        await this.db.executeSql(
-            `UPDATE readings SET is_synced = 1 WHERE id IN (${placeholders})`,
-            ids
-        );
-    }
-
-    /**
-     * Get total reading count
-     */
-    async getReadingCount(): Promise<number> {
+    async getReadingCount(userId: string): Promise<number> {
+        await this.ensureInitialized();
         if (!this.db) throw new Error('Database not initialized');
 
-        const result = await this.db.executeSql('SELECT COUNT(*) as count FROM readings');
+        const result = await this.db.executeSql('SELECT COUNT(*) as count FROM readings WHERE user_id = ?', [userId]);
         return result[0].rows.item(0).count;
     }
 
     /**
-     * Get database statistics
+     * Get database statistics for a specific user
      */
-    async getStats(): Promise<{
+    async getStats(userId: string): Promise<{
         totalReadings: number;
         oldestReading: number | null;
         newestReading: number | null;
     }> {
+        await this.ensureInitialized();
         if (!this.db) throw new Error('Database not initialized');
 
-        const countResult = await this.db.executeSql('SELECT COUNT(*) as count FROM readings');
+        const countResult = await this.db.executeSql('SELECT COUNT(*) as count FROM readings WHERE user_id = ?', [userId]);
         const oldestResult = await this.db.executeSql(
-            'SELECT MIN(timestamp) as oldest FROM readings'
+            'SELECT MIN(timestamp) as oldest FROM readings WHERE user_id = ?',
+            [userId]
         );
         const newestResult = await this.db.executeSql(
-            'SELECT MAX(timestamp) as newest FROM readings'
+            'SELECT MAX(timestamp) as newest FROM readings WHERE user_id = ?',
+            [userId]
         );
 
         return {
@@ -389,12 +503,14 @@ class Database {
     }
 
     /**
-     * Close database connection
+     * Close database connection (resets the singleton so initialize() can re-open it)
      */
     async close(): Promise<void> {
         if (this.db) {
             await this.db.close();
             this.db = null;
+            this.initializationPromise = null; // Allow re-init after close
+            console.log('Database closed');
         }
     }
 }
